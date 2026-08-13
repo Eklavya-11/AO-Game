@@ -145,5 +145,5 @@ Distributed under the MIT License. See `LICENSE` for details.
 ---
 
 <p center>
-  Built with ❤️ by Team OriginalGame for the AgentOrchestrator (AO) Hackathon 2026.
+  Built with ❤️ by Team MetaData for the AgentOrchestrator (AO) Hackathon 2026.
 </p>
