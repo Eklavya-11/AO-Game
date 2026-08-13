@@ -5,6 +5,7 @@ import { useGameStore } from "../lib/store/useGameStore";
 import { voiceCache, sha256, resolveRegionalVoice } from "../lib/world-engine";
 import { fetchSarvamTTS } from "../lib/gemini";
 import { voiceEngine } from "../lib/audio/voice-engine";
+import { audioManager } from "../assets/audio/AudioManager";
 
 export const DialogueBox: React.FC = () => {
   const fsmState = useGameStore((state) => state.fsmState);
@@ -27,30 +28,50 @@ export const DialogueBox: React.FC = () => {
   const clueId = npc?.clueIndex !== undefined ? `clue_${npc.clueIndex}` : npc?.name || "generic_clue";
   const hasAlreadyAcquiredClue = Boolean(acquiredClues[clueId]);
 
+  // Helper: Strip stage directions like [Ambient], [Whispers]
+  const sanitizeText = (rawText: string): string => {
+    if (!rawText) return "";
+    return rawText
+      .replace(/\[.*?\]/g, "")
+      .replace(/\(.*?\)/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  };
+
+  // Resolve NPC Avatar Image (Image 2 Diamond Profile Style)
+  const getNpcAvatar = (): string => {
+    if (!npc) return "/fallback/npc_lakha.png";
+    const nameLower = npc.name.toLowerCase();
+    if (nameLower.includes("officer") || nameLower.includes("quartermaster") || nameLower.includes("british")) {
+      return "/fallback/npc_officer.png";
+    }
+    return "/fallback/npc_lakha.png";
+  };
+
   // Initial dialogue load when entering DIALOGUE_ACTIVE state
   useEffect(() => {
     if (fsmState === "DIALOGUE_ACTIVE" && npc) {
       setTurnCount(1);
 
-      // Issue #20 Guardrail Evaluator Check
       if (hasAlreadyAcquiredClue) {
-        // Fallback to static friendly ambient text without firing LLM or TTS
+        const guardrailLine = `Ah, good to see you again friend! I've already shared everything I know regarding our matter. Safe travels!`;
         setDialogueHistory([
           {
             speaker: npc.name,
-            text: `[Ambient] Ah, good to see you again friend! I've already shared everything I know regarding our matter. Safe travels!`,
+            text: guardrailLine,
           },
         ]);
-        setAudioStatus("Guardrail Intercepted (0 API Calls)");
+        setAudioStatus("Guardrail Active — Playing Friendly Voice");
+        playVoiceTTS(npc.voice || "bulbul_v3_default", guardrailLine);
       } else {
-        // Initial opening line from NPC
+        const cleanOpening = sanitizeText(npc.opening);
         setDialogueHistory([
           {
             speaker: npc.name,
-            text: npc.opening,
+            text: cleanOpening,
           },
         ]);
-        playVoiceTTS(npc.voice || "bulbul_v3_default", npc.opening);
+        playVoiceTTS(npc.voice || "bulbul_v3_default", cleanOpening);
       }
     }
   }, [fsmState, npc, hasAlreadyAcquiredClue]);
@@ -59,13 +80,16 @@ export const DialogueBox: React.FC = () => {
 
   // Play audio using SHA-256 caching & Web Audio API
   const playVoiceTTS = async (voiceId: string, text: string) => {
+    const cleanText = sanitizeText(text);
+    if (!cleanText) return;
+
     setIsPlayingAudio(true);
     updateAgentTelemetry("Audio Engine", { status: "generating", lastAction: "Checking SHA-256 Voice Pool", latencyMs: 12 });
 
     const worldPremise = useGameStore.getState().worldPremise;
     const regionalVoice = resolveRegionalVoice(worldPremise);
 
-    const hash = await sha256(`${regionalVoice.speaker}_${regionalVoice.langCode}_${text}`);
+    const hash = await sha256(`${regionalVoice.speaker}_${regionalVoice.langCode}_${cleanText}`);
     let cachedBlob = await voiceCache.getAudioBlob(hash);
 
     if (cachedBlob) {
@@ -76,29 +100,27 @@ export const DialogueBox: React.FC = () => {
       updateAgentTelemetry("Audio Engine", { status: "generating", lastAction: `Streaming ${regionalVoice.region} Audio`, latencyMs: 380 });
       incrementApiCalls(0.04);
 
-      // Live Sarvam Bulbul v3 TTS Fetch & Cache Store
-      const fetchedBlob = await fetchSarvamTTS(text, regionalVoice.speaker, regionalVoice.langCode);
+      const fetchedBlob = await fetchSarvamTTS(cleanText, regionalVoice.speaker, regionalVoice.langCode);
       if (fetchedBlob) {
         cachedBlob = fetchedBlob;
         await voiceCache.putAudioBlob(hash, cachedBlob);
         setAudioStatus(`Saved (${regionalVoice.region} - ${hash.substring(0, 8)})`);
       } else {
         useGameStore.getState().showToast("Sarvam API Unavailable - Switched to Browser Speech", 3000);
-        voiceEngine.speakSpeechSynthesis(text, regionalVoice.langCode);
+        voiceEngine.speakSpeechSynthesis(cleanText, regionalVoice.langCode);
         setAudioStatus(`Browser TTS (${regionalVoice.region})`);
       }
       updateAgentTelemetry("Audio Engine", { status: "completed", lastAction: "Cached / SpeechSynthesized", latencyMs: 380 });
     }
 
-    // Play Audio Stream via Unlocked Voice Engine Manager
     if (cachedBlob && cachedBlob.size > 200) {
       const success = await voiceEngine.playVoiceBlob(cachedBlob);
       if (!success) {
-        voiceEngine.speakSpeechSynthesis(text, regionalVoice.langCode);
+        voiceEngine.speakSpeechSynthesis(cleanText, regionalVoice.langCode);
         setAudioStatus(`Browser Speech (${regionalVoice.region})`);
       }
     } else {
-      voiceEngine.speakSpeechSynthesis(text, regionalVoice.langCode);
+      voiceEngine.speakSpeechSynthesis(cleanText, regionalVoice.langCode);
       setAudioStatus(`Browser Speech (${regionalVoice.region})`);
     }
 
@@ -117,11 +139,9 @@ export const DialogueBox: React.FC = () => {
     const nextTurn = turnCount + 1;
     setTurnCount(nextTurn);
 
-    // Simulate gemini-3.5-flash turn response
     await new Promise((res) => setTimeout(res, 600));
     incrementApiCalls(0.06);
 
-    // Ground dialogue generation in Vision landmarks context
     const landmarksStr = currentScene?.visualLandmarks?.join(", ") || "surrounding street";
     let npcResponseText = "";
     if (nextTurn === 2) {
@@ -133,108 +153,97 @@ export const DialogueBox: React.FC = () => {
       updateAgentTelemetry("Dialogue Agent", { status: "completed", lastAction: "Concluded Dialogue Chain", latencyMs: 450 });
     }
 
-    setDialogueHistory([...newHistory, { speaker: npc.name, text: npcResponseText }]);
+    const cleanResponse = sanitizeText(npcResponseText);
+    setDialogueHistory([...newHistory, { speaker: npc.name, text: cleanResponse }]);
     setIsThinking(false);
 
-    // Trigger TTS for NPC turn
-    playVoiceTTS(npc.voice || "bulbul_v3_default", npcResponseText);
+    playVoiceTTS(npc.voice || "bulbul_v3_default", cleanResponse);
   };
 
   const closeDialogue = () => {
+    voiceEngine.stopCurrentVoice();
+    audioManager.stopAudio();
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {}
+    }
+    setIsPlayingAudio(false);
     setFSMState("EXPLORING");
   };
 
+  const latestDialogue = dialogueHistory[dialogueHistory.length - 1];
+
   return (
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-full max-w-2xl bg-slate-900/95 backdrop-blur-md border border-amber-500/40 rounded-xl p-5 shadow-2xl text-slate-100 z-50">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-3">
-        <div>
-          <h3 className="font-bold text-amber-400 text-lg flex items-center gap-2">
-            <span>🗣️</span> {npc.name}
-            <span className="text-xs font-normal text-slate-400">({npc.role})</span>
-          </h3>
-          <p className="text-xs text-slate-400 italic">{npc.persona}</p>
+    <div className="fixed bottom-0 left-0 right-0 z-50 bg-gradient-to-t from-slate-950 via-slate-950/95 to-transparent pt-12 pb-6 px-6 flex justify-center animate-in slide-in-from-bottom duration-300">
+      <div className="w-full max-w-4xl bg-stone-900/90 border-2 border-amber-600/60 rounded-2xl shadow-[0_0_50px_rgba(0,0,0,0.9)] p-6 relative flex flex-col md:flex-row items-center gap-6 backdrop-blur-md">
+        
+        {/* Parchment Wax Seal & Header Badge (Image 1 Style) */}
+        <div className="absolute -top-4 left-8 bg-amber-700 text-amber-100 text-[10px] font-bold uppercase tracking-widest px-3 py-1 rounded-full border border-amber-500 shadow-md flex items-center gap-1.5">
+          <span>📜</span> {npc.role || "Wager Informant"}
         </div>
 
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => {
-              const lastNpcLine = [...dialogueHistory].reverse().find((t) => t.speaker !== "Player")?.text || npc.opening;
-              playVoiceTTS(npc.voice || "kavya", lastNpcLine);
-            }}
-            className={`text-xs px-2.5 py-1 rounded flex items-center gap-1.5 border transition ${
-              isPlayingAudio
-                ? "bg-amber-500/20 border-amber-400 text-amber-300 animate-pulse"
-                : "bg-slate-800 border-slate-700 text-slate-300 hover:text-white"
-            }`}
-            title="Tap to play voice audio"
-          >
-            <span>{isPlayingAudio ? "🔊 Playing" : "🔈 Replay Voice"}</span>
-          </button>
-          <span className="text-xs px-2 py-1 bg-slate-800 border border-slate-700 rounded text-slate-300">
-            {audioStatus}
-          </span>
-          <button
-            onClick={closeDialogue}
-            className="text-slate-400 hover:text-white text-sm font-semibold px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded transition"
-          >
-            Esc ✕
-          </button>
-        </div>
-      </div>
-
-      {/* Dialogue Thread */}
-      <div className="space-y-3 max-h-48 overflow-y-auto pr-2 mb-4">
-        {dialogueHistory.map((turn, idx) => (
-          <div
-            key={idx}
-            className={`p-3 rounded-lg text-sm ${
-              turn.speaker === "Player"
-                ? "bg-slate-800/80 border border-slate-700 text-sky-300 ml-6"
-                : "bg-amber-950/30 border border-amber-800/40 text-amber-100 mr-6"
-            }`}
-          >
-            <span className="font-semibold text-xs opacity-75 block mb-1">{turn.speaker}:</span>
-            {turn.text}
+        {/* Dialogue Text Content Area (Image 2 Style) */}
+        <div className="flex-1 space-y-3">
+          <div className="flex items-center justify-between border-b border-amber-900/50 pb-2">
+            <h3 className="font-serif text-amber-400 font-extrabold text-xl tracking-wide uppercase flex items-center gap-2">
+              {npc.name}
+            </h3>
+            <span className="text-xs font-mono text-amber-500/80 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800/40">
+              {audioStatus}
+            </span>
           </div>
-        ))}
 
-        {isThinking && (
-          <div className="text-xs text-amber-400/80 animate-pulse flex items-center gap-2 italic p-2">
-            <span className="w-2 h-2 bg-amber-400 rounded-full animate-ping" />
-            NPC is pondering reply...
+          {/* Typewriter Spoken Text */}
+          <div className="min-h-[70px] text-slate-200 text-sm md:text-base leading-relaxed font-serif tracking-wide italic bg-stone-950/60 p-4 rounded-xl border border-amber-900/40 shadow-inner">
+            "{latestDialogue?.text || sanitizeText(npc.opening)}"
           </div>
-        )}
-      </div>
 
-      {/* Interactive Options or Ambient Guardrail state */}
-      {!hasAlreadyAcquiredClue && turnCount < 3 ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-slate-800">
-          <button
-            disabled={isThinking}
-            onClick={() => handlePlayerReply("Tell me what you know about the secret in this town.")}
-            className="text-left text-xs bg-slate-800 hover:bg-amber-900/40 border border-slate-700 hover:border-amber-500/50 p-2.5 rounded-md transition text-slate-200 hover:text-amber-200 disabled:opacity-50"
-          >
-            1. "Tell me what you know about the secret..."
-          </button>
-          <button
-            disabled={isThinking}
-            onClick={() => handlePlayerReply("Who owns the buildings along this street?")}
-            className="text-left text-xs bg-slate-800 hover:bg-amber-900/40 border border-slate-700 hover:border-amber-500/50 p-2.5 rounded-md transition text-slate-200 hover:text-amber-200 disabled:opacity-50"
-          >
-            2. "Who owns the buildings along this street?"
-          </button>
+          {/* Action Choice Buttons */}
+          {!hasAlreadyAcquiredClue && turnCount < 2 && (
+            <div className="flex flex-wrap gap-2.5 pt-2">
+              <button
+                disabled={isThinking}
+                onClick={() => handlePlayerReply("Where can I find the wager scroll fragment?")}
+                className="px-4 py-2 bg-gradient-to-r from-amber-700 to-amber-600 hover:from-amber-600 hover:to-amber-500 text-amber-50 text-xs font-bold rounded-lg border border-amber-400/40 shadow-md transition disabled:opacity-50"
+              >
+                🔍 Ask about Wager Scroll
+              </button>
+              <button
+                disabled={isThinking}
+                onClick={() => handlePlayerReply("Are Captain Russell's men patrolling nearby?")}
+                className="px-4 py-2 bg-stone-800 hover:bg-stone-700 text-amber-200 text-xs font-semibold rounded-lg border border-amber-900/60 shadow-md transition disabled:opacity-50"
+              >
+                🛡️ Ask about Redcoat Patrols
+              </button>
+            </div>
+          )}
+
+          {/* Close Action */}
+          <div className="flex justify-end pt-1">
+            <button
+              onClick={closeDialogue}
+              className="px-5 py-2 bg-red-950/80 hover:bg-red-900 text-red-200 border border-red-800/60 text-xs font-bold rounded-lg shadow transition"
+            >
+              🚪 Exit Conversation
+            </button>
+          </div>
         </div>
-      ) : (
-        <div className="text-center pt-2 border-t border-slate-800">
-          <button
-            onClick={closeDialogue}
-            className="w-full py-2 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs rounded transition"
-          >
-            Conclude Conversation (Press Esc)
-          </button>
+
+        {/* Diamond Character Profile Avatar Frame (Image 2 Style) */}
+        <div className="relative flex-shrink-0 w-32 h-32 md:w-40 md:h-40 flex items-center justify-center">
+          <div className="w-28 h-28 md:w-36 md:h-36 rotate-45 overflow-hidden border-2 border-amber-400 shadow-[0_0_20px_rgba(245,158,11,0.4)] bg-stone-950 relative">
+            <img
+              src={getNpcAvatar()}
+              alt={npc.name}
+              className="-rotate-45 scale-135 w-full h-full object-cover"
+            />
+          </div>
+          {/* Avatar Glow Ring */}
+          <div className="absolute inset-0 rounded-full border border-amber-500/20 pointer-events-none animate-pulse" />
         </div>
-      )}
+
+      </div>
     </div>
   );
 };

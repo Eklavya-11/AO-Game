@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import { useGameStore } from "../lib/store/useGameStore";
+import { DevAudioTester } from "./DevAudioTester";
 
 export const TelemetryHUD: React.FC = () => {
   const [isMinimized, setIsMinimized] = useState<boolean>(false);
@@ -27,7 +28,7 @@ export const TelemetryHUD: React.FC = () => {
       )}
 
       <div
-        className={`fixed top-4 right-4 z-40 bg-slate-950/90 backdrop-blur-md border border-sky-500/30 rounded-xl shadow-2xl text-slate-100 font-mono text-xs transition-all duration-300 ${
+        className={`fixed top-20 right-4 z-40 bg-slate-950/90 backdrop-blur-md border border-sky-500/30 rounded-xl shadow-2xl text-slate-100 font-mono text-xs transition-all duration-300 ${
           isMinimized ? "w-48 p-2.5" : "w-80 p-4"
         }`}
       >
@@ -116,6 +117,9 @@ export const TelemetryHUD: React.FC = () => {
               <span className="text-emerald-400 font-bold">₹{totalEstimatedCostINR.toFixed(2)}</span>
             </div>
           </div>
+
+          {/* Standalone Sarvam Audio Tester */}
+          <DevAudioTester />
         </>
       )}
     </div>

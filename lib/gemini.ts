@@ -61,9 +61,9 @@ export async function generateSceneImage(prompt: string, seed: string): Promise<
       }
     }
   } catch (e) {
-    console.warn("[Gemini Image API] Live generation fallback to high-res seed image:", e);
+    console.warn("[Gemini Image API] Live generation fallback to local Champaner map:", e);
   }
-  return `https://picsum.photos/seed/${encodeURIComponent(seed)}/800/600`;
+  return "/fallback/champaner_overworld.png";
 }
 
 /**
@@ -84,12 +84,9 @@ export async function fetchSarvamTTS(
       },
       body: JSON.stringify({
         inputs: [text],
-        text: text,
         target_language_code: langCode,
         speaker: speaker || "kavya",
-        pitch: 0,
         pace: 1.0,
-        loudness: 1.5,
         speech_sample_rate: 22050,
         enable_preprocessing: true,
         model: "bulbul:v3",

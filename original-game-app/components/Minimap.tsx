@@ -17,7 +17,7 @@ export const Minimap: React.FC = () => {
     <div
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
-      className={`fixed top-4 left-4 z-40 transition-all duration-300 ease-in-out font-mono text-slate-100 ${
+      className={`fixed top-20 left-4 z-40 transition-all duration-300 ease-in-out font-mono text-slate-100 ${
         isHovered
           ? "w-64 h-64 rounded-2xl bg-slate-950/95 border border-amber-500/60 p-4 shadow-2xl backdrop-blur-md"
           : "w-24 h-24 rounded-full bg-slate-950/80 border-2 border-amber-500/50 p-1.5 shadow-xl backdrop-blur-sm cursor-pointer overflow-hidden flex items-center justify-center"

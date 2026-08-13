@@ -16,16 +16,19 @@ export function preloadImage(url: string): Promise<HTMLImageElement> {
 
   const p = new Promise<HTMLImageElement>((resolve, reject) => {
     const img = new Image();
-    img.crossOrigin = "anonymous";
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      img.crossOrigin = "anonymous";
+    }
     img.onload = () => {
       pending.delete(url);
       imageCache.set(url, img);
       resolve(img);
     };
-    img.onerror = () => {
+    img.onerror = (e) => {
       pending.delete(url);
       imageCache.delete(url);
-      reject(new Error(`Failed to load image: ${url}`));
+      console.warn(`[ImageCache] Error loading image: ${url}`);
+      reject(e);
     };
     img.src = url;
   });
